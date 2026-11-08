@@ -84,7 +84,16 @@ def classify(blob):
     created = b"c2pa.created" in blob
     converted = b"c2pa.converted" in blob
     edited = b"c2pa.edited" in blob
-    return hits, gen, created, converted, edited
+    # digitalSourceType rozstrzyga co do istoty: composite zawiera w sobie
+    # substring "trainedAlgorithmicMedia", wiec sprawdzamy composite pierwszy.
+    dsc = []
+    if b"compositeWithTrainedAlgorithmicMedia" in blob:
+        dsc.append("compositeWithTrainedAlgorithmicMedia")
+    elif b"trainedAlgorithmicMedia" in blob:
+        dsc.append("trainedAlgorithmicMedia")
+    if b"digitalCapture" in blob:
+        dsc.append("digitalCapture")
+    return hits, gen, created, converted, edited, dsc
 
 
 def report(path):
@@ -107,7 +116,7 @@ def report(path):
         return
 
     meta_blob = b"".join(d for _, _, d in containers)
-    hits, gen, created, converted, edited = classify(meta_blob)
+    hits, gen, created, converted, edited, dsc = classify(meta_blob)
 
     print("  C2PA/JUMBF obecne:", "tak" if b"jumb" in b else "NIE")
     print("  markery AI:", hits or "brak")
@@ -115,6 +124,7 @@ def report(path):
     print("  akcje:", ", ".join(x for x, f in
                                 (("c2pa.created", created), ("c2pa.converted", converted),
                                  ("c2pa.edited", edited)) if f) or "brak")
+    print("  typ źródła (digitalSourceType):", ", ".join(dsc) or "brak")
 
     # daty i identyfikatory
     dates = sorted(set(re.findall(r"20\d\d-\d\d-\d\dT[\d:.]+", meta_blob.decode("latin1", "ignore"))))
@@ -124,9 +134,18 @@ def report(path):
     if urns:
         print("  manifest:", urns[0])
 
-    # werdykt
-    if hits or created and gen:
+    # werdykt: najpierw digitalSourceType (rozstrzygajace), potem heurystyka.
+    # Uwaga: nazwa firmy w certyfikacie ("Google LLC") to nie dowod generowania -
+    # zwykle zdjecie z aparatu tez moze miec c2pa.created i podpis Google.
+    if "compositeWithTrainedAlgorithmicMedia" in dsc:
+        print("  >>> WERDYKT: edytowane z udziałem AI (compositeWithTrainedAlgorithmicMedia)")
+    elif "trainedAlgorithmicMedia" in dsc:
         print("  >>> WERDYKT: ślady generowania AI / treść syntetyczna")
+    elif "digitalCapture" in dsc:
+        print("  >>> WERDYKT: zdjęcie z aparatu (digitalCapture)")
+    elif created and gen:
+        print("  >>> WERDYKT: podpisany manifest od narzędzia:",
+              ", ".join(sorted(set(gen)) or ["?"]), "- sprawdź digitalSourceType/akcje")
     elif created or edited:
         print("  >>> WERDYKT: podpisany manifest edycji (sprawdź akcje)")
     else:
